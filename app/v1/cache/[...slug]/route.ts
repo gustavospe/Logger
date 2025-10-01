@@ -14,8 +14,10 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       headers[key] = value
     })
 
-    // Captura o body
+    // Captura o body e extrai URLs
     let body = {}
+    let extractedUrls: string[] = []
+    
     try {
       const text = await request.text()
       if (text) {
@@ -24,6 +26,14 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
           body = JSON.parse(text)
         } catch {
           body = { raw: text }
+          // Se é form-data, tenta extrair URLs do formato urls[n]=...
+          const urlMatches = text.match(/urls\[[^\]]+\]=([^&]+)/g)
+          if (urlMatches) {
+            extractedUrls = urlMatches.map(match => {
+              const urlPart = match.split('=')[1]
+              return decodeURIComponent(urlPart)
+            })
+          }
         }
       }
     } catch (error) {
@@ -37,7 +47,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       url: `/v1/cache/${url}`,
       headers,
       body,
-      ip: request.ip || headers["x-forwarded-for"] || "unknown",
+      ip: headers["x-forwarded-for"] || headers["x-real-ip"] || "unknown",
     }
 
     // Salva no arquivo de log
@@ -68,14 +78,26 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
 
     console.log(`Request logged: DELETE /v1/cache/${url}`)
 
+    // Responde no padrão especificado
+    const responseHeaders = {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': 'https://painel.gocache.com.br',
+      'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+      'X-Gocache-Cachestatus': 'BYPASS',
+      'Server': 'gocache',
+      'Server-Timing': 'x-gocache-cache-status;desc="BYPASS",x-variant;desc="a",x-id;desc="7751f0fc943c80c361c8c4deb74bffed"',
+    }
+
     return NextResponse.json(
       {
-        success: true,
-        message: "Request logged successfully",
-        url: `/v1/cache/${url}`,
-        timestamp: logEntry.timestamp,
+        response: {
+          urls_accepted: extractedUrls.length > 0 ? extractedUrls : [`https://${url}`]
+        }
       },
-      { status: 200 },
+      { 
+        status: 202,
+        headers: responseHeaders
+      },
     )
   } catch (error) {
     console.error("Error processing request:", error)
